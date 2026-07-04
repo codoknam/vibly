@@ -62,7 +62,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, result);
     }
 
-    if (/^\/\d{3,}$/.test(pathname)) {
+    if (isPublishedPath(pathname)) {
       return servePublished(pathname.slice(1), res);
     }
 
@@ -101,6 +101,7 @@ function createInitialState() {
 }
 
 function createProject(name, framework, order) {
+  const slugBase = sanitizeDeploySlug(name) || `site-${order}`;
   return {
     id: makeId(),
     name,
@@ -111,7 +112,9 @@ function createProject(name, framework, order) {
     versions: [],
     deployments: [],
     liveDeploymentId: null,
-    deployNumber: String(order).padStart(3, "0"),
+    deploySlug: slugBase,
+    deployAliases: [],
+    redirectSlugs: [],
     ai: {
       provider: "openai",
       model: "gpt-4o-mini",
@@ -251,7 +254,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);`
 
 function readState() {
   const raw = fs.readFileSync(DATA_FILE, "utf8");
-  const state = JSON.parse(raw);
+  const state = normalizeState(JSON.parse(raw));
   if (!state.activeProjectId && state.projects[0]) {
     state.activeProjectId = state.projects[0].id;
   }
@@ -259,8 +262,10 @@ function readState() {
 }
 
 function writeState(state) {
-  state.updatedAt = now();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+  validateProjectSlugs(state.projects);
+  const normalized = normalizeState(state);
+  normalized.updatedAt = now();
+  fs.writeFileSync(DATA_FILE, JSON.stringify(normalized, null, 2));
 }
 
 function json(res, statusCode, payload) {
@@ -289,9 +294,19 @@ function serveStatic(pathname, res) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-function servePublished(deployNumber, res) {
+function servePublished(deploySlug, res) {
   const state = readState();
-  const project = state.projects.find((item) => item.deployNumber === deployNumber);
+  const redirectProject = state.projects.find((item) => (item.redirectSlugs || []).includes(deploySlug));
+  if (redirectProject) {
+    res.writeHead(302, {
+      Location: `/${redirectProject.deploySlug}`,
+      "Cache-Control": "no-store"
+    });
+    res.end();
+    return;
+  }
+
+  const project = state.projects.find((item) => item.deploySlug === deploySlug || (item.deployAliases || []).includes(deploySlug));
   if (!project || !project.liveDeploymentId) {
     return text(res, 404, "No live deployment");
   }
@@ -367,6 +382,139 @@ ${files["app.js"] || ""}
   }
 
   return html;
+}
+
+function isPublishedPath(pathname) {
+  return /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(pathname) && !isReservedDeploySlug(pathname.slice(1));
+}
+
+function normalizeState(raw) {
+  const source = raw && Array.isArray(raw.projects) ? raw : createInitialState();
+  const seen = new Set();
+  source.projects = source.projects.map((project, index) => normalizeProject(project, index, seen));
+  source.activeProjectId = source.activeProjectId || source.projects[0]?.id || null;
+  source.updatedAt = source.updatedAt || now();
+  return source;
+}
+
+function normalizeProject(project, index, seen) {
+  const framework = ["html", "react", "vue"].includes(project.framework) ? project.framework : "html";
+  const files = project.files && typeof project.files === "object" ? project.files : getTemplate(framework);
+  const slug = makeUniqueDeploySlug(project.deploySlug || project.deployNumber || project.name || `site-${index}`, seen);
+  const deployAliases = reserveOptionalSlugs(project.deployAliases || [], seen);
+  const redirectSlugs = reserveOptionalSlugs(project.redirectSlugs || [], seen);
+  return {
+    id: project.id || makeId(),
+    name: project.name || `Project ${index + 1}`,
+    framework,
+    libraries: Array.isArray(project.libraries) ? project.libraries : [],
+    files,
+    activeFile: project.activeFile && files[project.activeFile] !== undefined ? project.activeFile : (framework === "react" ? "app.jsx" : framework === "vue" ? "app.js" : "index.html"),
+    versions: Array.isArray(project.versions) ? project.versions : [],
+    deployments: Array.isArray(project.deployments) ? project.deployments : [],
+    liveDeploymentId: project.liveDeploymentId || null,
+    deploySlug: slug,
+    deployAliases,
+    redirectSlugs,
+    ai: {
+      provider: project.ai?.provider || "openai",
+      model: project.ai?.model || "gpt-4o-mini",
+      baseUrl: project.ai?.baseUrl || DEFAULT_BASE_URL,
+      headersJson: project.ai?.headersJson || "",
+      apiKey: project.ai?.apiKey || "",
+      messages: Array.isArray(project.ai?.messages) ? project.ai.messages : []
+    },
+    createdAt: project.createdAt || now(),
+    updatedAt: project.updatedAt || now()
+  };
+}
+
+function sanitizeDeploySlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function uniqueSlugs(slugs) {
+  return [...new Set((slugs || []).map((slug) => sanitizeDeploySlug(slug)).filter(Boolean))];
+}
+
+function isReservedDeploySlug(slug) {
+  return ["api", "app", "index", "styles", "assets", "favicon"].includes(String(slug || "").toLowerCase());
+}
+
+function isValidRouteSlug(slug) {
+  return Boolean(slug) &&
+    slug.length >= 2 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) &&
+    !isReservedDeploySlug(slug);
+}
+
+function reserveOptionalSlugs(slugs, seen) {
+  const result = [];
+  for (const slug of uniqueSlugs(slugs)) {
+    if (isValidRouteSlug(slug) && !seen.has(slug)) {
+      seen.add(slug);
+      result.push(slug);
+    }
+  }
+  return result;
+}
+
+function makeUniqueDeploySlug(base, seen) {
+  const normalizedSeen = seen || new Set();
+  const safeBase = sanitizeDeploySlug(base) || "site";
+  let candidate = safeBase;
+  let suffix = 2;
+  while (
+    !candidate ||
+    candidate.length < 2 ||
+    isReservedDeploySlug(candidate) ||
+    normalizedSeen.has(candidate) ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate)
+  ) {
+    candidate = `${safeBase}-${suffix}`.slice(0, 40).replace(/-+$/g, "");
+    suffix += 1;
+  }
+  normalizedSeen.add(candidate);
+  return candidate;
+}
+
+function validateProjectSlugs(projects) {
+  if (!Array.isArray(projects)) {
+    throw new Error("Projects list is required");
+  }
+  const seen = new Set();
+  for (const [index, project] of projects.entries()) {
+    const candidate = sanitizeDeploySlug(project?.deploySlug || project?.deployNumber || project?.name || `site-${index}`);
+    reserveRequiredSlug(candidate, seen, "배포 주소");
+    for (const alias of uniqueSlugs(project?.deployAliases || [])) {
+      reserveRequiredSlug(alias, seen, "추가 배포 주소");
+    }
+    for (const redirect of uniqueSlugs(project?.redirectSlugs || [])) {
+      reserveRequiredSlug(redirect, seen, "이전 주소 리디렉트");
+    }
+  }
+}
+
+function reserveRequiredSlug(slug, seen, label) {
+  if (!slug) {
+    throw new Error(`${label}를 비워둘 수 없습니다.`);
+  }
+  if (slug.length < 2 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error(`유효하지 않은 ${label}입니다: ${slug}`);
+  }
+  if (isReservedDeploySlug(slug)) {
+    throw new Error(`시스템 예약 주소는 사용할 수 없습니다: ${slug}`);
+  }
+  if (seen.has(slug)) {
+    throw new Error(`이미 사용 중인 배포 주소입니다: ${slug}`);
+  }
+  seen.add(slug);
 }
 
 function text(res, statusCode, value) {
