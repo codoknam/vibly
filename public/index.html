@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vibly</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">V</div>
+        <div>
+          <div class="brand-name">Vibly</div>
+          <div class="brand-copy">AI로 만들고, 수정하고, 배포까지 이어가는 웹 빌더</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="heroAiBtn" class="button small primary" type="button">AI에게 물어보기</button>
+        <div class="pill" id="storageModePill">로딩 중...</div>
+        <div class="pill">HTML / CSS / JS + React + Vue</div>
+        <div class="pill">AI 생성 + 수정 + 배포 + 롤백</div>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <div class="tagline">Talk to build · preview · deploy · rollback</div>
+        <h1>원하는 사이트를<br>대화하듯 만들고 바로 테스트하는 Vibly</h1>
+        <p>
+          프로젝트를 나눠 관리하고, 저장하고, 배포하고, 다시 롤백할 수 있습니다.
+          파일로 열어도 기본 작업이 이어지고, 서버로 실행하면 다른 기기에서도 바로 확인할 수 있습니다.
+        </p>
+      </div>
+      <div class="hero-grid">
+        <div class="mini-card">
+          <strong>현재 주소</strong>
+          <div class="subtle">서버 모드에서는 같은 네트워크의 다른 기기에서도 이 주소로 접속할 수 있습니다.</div>
+          <code id="serverAddress">http://localhost:3000</code>
+        </div>
+        <div class="mini-card">
+          <strong>배포 주소 예시</strong>
+          <div class="subtle">프로젝트를 배포하면 숫자 주소에 최신 버전이 연결됩니다.</div>
+          <code id="deployPattern">http://localhost:3000/000</code>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel">
+        <h2>Projects</h2>
+        <div id="projectSummary" class="project-card"></div>
+
+        <div class="button-row section-gap">
+          <button id="newProjectBtn" class="button small primary">새 프로젝트</button>
+          <button id="cloneProjectBtn" class="button small ghost">복제</button>
+        </div>
+
+        <div id="projectList" class="project-list"></div>
+
+        <div class="section-box section-gap">
+          <div class="row bottom-gap">
+            <strong>프로젝트 설정</strong>
+            <button id="deleteProjectBtn" class="button small danger">삭제</button>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>프로젝트 이름</span>
+              <input id="projectNameInput" type="text" placeholder="예: Seoul Roastery">
+            </label>
+            <label>
+              <span>프레임워크</span>
+              <select id="frameworkSelect">
+                <option value="html">HTML / CSS / JS</option>
+                <option value="react">React</option>
+                <option value="vue">Vue</option>
+              </select>
+            </label>
+            <label>
+              <span>추가 라이브러리 URL</span>
+              <textarea id="librariesInput" placeholder="한 줄에 하나씩 입력하세요&#10;https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js&#10;https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css"></textarea>
+            </label>
+          </div>
+          <div class="button-row top-gap">
+            <button id="applySettingsBtn" class="button small ghost">설정 반영</button>
+            <button id="saveVersionBtn" class="button small success">버전 저장</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="panel">
+        <div class="editor-head">
+          <div>
+            <h2>Editor</h2>
+            <div class="subtle">코드를 직접 수정하거나 AI가 바꾼 결과를 바로 비교할 수 있습니다.</div>
+          </div>
+          <div class="button-row">
+            <button id="addFileBtn" class="button small ghost">파일 추가</button>
+            <button id="deleteFileBtn" class="button small ghost">파일 삭제</button>
+            <button id="formatBtn" class="button small ghost">자동 정리</button>
+          </div>
+        </div>
+
+        <div id="fileTabs" class="file-tabs"></div>
+
+        <div class="editor-grid">
+          <div class="editor-toolbar">
+            <div class="tiny" id="activeFileLabel"></div>
+          <div class="button-row">
+            <button id="editorAiBtn" class="button small primary" type="button">AI에게 물어보기</button>
+            <button id="previewBtn" class="button small navy">미리보기 새로고침</button>
+            <button id="deployBtn" class="button small primary">배포</button>
+            <button id="exportBtn" class="button small ghost">HTML 내보내기</button>
+            </div>
+          </div>
+          <textarea id="editorArea" class="editor-area" spellcheck="false"></textarea>
+        </div>
+      </main>
+
+      <section class="panel side-panel">
+        <h2>Preview · History</h2>
+
+        <div class="section-box">
+          <div class="row bottom-gap">
+            <strong>Site Preview</strong>
+            <span id="deployBadge" class="status warn">아직 배포되지 않음</span>
+          </div>
+          <div class="preview-actions">
+            <button id="openPreviewBtn" class="button small ghost">새 창 미리보기</button>
+            <button id="openLiveBtn" class="button small ghost">라이브 열기</button>
+          </div>
+          <div class="preview-note">
+            작은 화면에서는 미리보기를 이 칸에 억지로 넣지 않고 새 탭으로 크게 엽니다.
+          </div>
+          <iframe id="previewFrame" class="preview-frame" title="Preview"></iframe>
+        </div>
+
+        <div class="section-box">
+          <div class="row bottom-gap">
+            <strong>Deploy History</strong>
+            <span class="tiny mono" id="liveUrlLabel">http://localhost:3000/---</span>
+          </div>
+          <div id="deployList" class="history-list"></div>
+        </div>
+
+        <div class="section-box">
+          <strong>Saved Versions</strong>
+          <div id="versionList" class="history-list top-gap"></div>
+        </div>
+      </section>
+    </section>
+  </div>
+
+  <button id="chatToggleBtn" class="chat-toggle" type="button" aria-expanded="false">
+    <span>AI 채팅</span>
+    <span id="chatToggleMeta" class="chat-toggle-meta">닫힘</span>
+  </button>
+
+  <aside id="chatDock" class="chat-dock collapsed" aria-hidden="true">
+    <div class="chat-dock-header">
+      <div>
+        <strong>Vibly AI</strong>
+        <div class="tiny">나와 대화하듯 요청하면 코드까지 바로 반영합니다.</div>
+      </div>
+      <button id="chatCloseBtn" class="button small ghost" type="button">닫기</button>
+    </div>
+
+    <details class="chat-config-details">
+      <summary>API 설정 / 모델 선택</summary>
+      <div class="chat-config">
+      <div class="ai-setup-card">
+        <strong>AI 빠른 연결</strong>
+        <p>API Key를 붙여넣고 제공사를 고르면 Vibly가 모델과 주소를 최대한 자동으로 맞춥니다.</p>
+        <div class="preset-grid">
+          <button class="preset-button" type="button" data-ai-preset="openai">OpenAI</button>
+          <button class="preset-button" type="button" data-ai-preset="openrouter">OpenRouter</button>
+          <button class="preset-button" type="button" data-ai-preset="groq">Groq</button>
+          <button class="preset-button" type="button" data-ai-preset="anthropic">Anthropic</button>
+          <button class="preset-button" type="button" data-ai-preset="gemini">Gemini</button>
+          <button class="preset-button" type="button" data-ai-preset="custom">직접 입력</button>
+        </div>
+        <div id="aiSetupHint" class="setup-hint">키를 붙여넣으면 가능한 경우 자동으로 제공사를 추정합니다.</div>
+      </div>
+      <div class="form-grid compact-grid">
+        <label>
+          <span>API 형식</span>
+          <select id="providerSelect">
+            <option value="auto">자동 감지</option>
+            <option value="openai">OpenAI 호환</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Google Gemini</option>
+          </select>
+        </label>
+        <label>
+          <span>모델</span>
+          <input id="modelInput" type="text" value="gpt-4o-mini">
+        </label>
+        <label>
+          <span>API Key</span>
+          <input id="apiKeyInput" type="password" placeholder="sk-...">
+        </label>
+        <label>
+          <span>API Base URL</span>
+          <input id="baseUrlInput" type="text" value="https://api.openai.com/v1/chat/completions" placeholder="모르면 비워두고 자동 감지를 눌러보세요">
+        </label>
+        <label>
+          <span>감지된 모델</span>
+          <select id="modelSelect">
+            <option value="">모델 감지 전</option>
+          </select>
+        </label>
+        <label class="full-span">
+          <span>추가 헤더 JSON</span>
+          <textarea id="headersInput" placeholder='예: {"HTTP-Referer":"https://example.com"}'></textarea>
+        </label>
+      </div>
+      <div class="button-row top-gap">
+        <button id="detectApiBtn" class="button small ghost" type="button">API 자동 감지</button>
+        <button id="testAiBtn" class="button small navy" type="button">연결 테스트</button>
+        <button id="saveAiSettingsBtn" class="button small ghost" type="button">설정 저장</button>
+      </div>
+      </div>
+    </details>
+
+    <div id="chatHistory" class="chat-history chat-history-large"></div>
+
+    <div class="chat-composer">
+      <label>
+        <span class="tiny">AI에게 요청</span>
+        <textarea id="promptInput" class="chat-composer-input" placeholder="예: 헤더를 더 세련되게 바꿔주고, CTA 버튼은 더 눈에 띄게 바꿔줘. 수정한 코드도 바로 반영해줘."></textarea>
+      </label>
+      <div class="button-row top-gap">
+        <button id="aiChatBtn" class="button small navy">대화만</button>
+        <button id="aiCreateBtn" class="button small primary">보내기</button>
+        <button id="aiFixBtn" class="button small ghost">오류 수정</button>
+        <button id="clearChatBtn" class="button small ghost">기록 지우기</button>
+      </div>
+      <div id="aiStatus" class="status top-gap">AI와 대화하면서 프로젝트 코드를 바로 수정할 수 있습니다.</div>
+    </div>
+  </aside>
+
+  <script src="app.js"></script>
+</body>
+</html>
