@@ -62,6 +62,9 @@ const els = {
   projectNameInput: document.getElementById("projectNameInput"),
   frameworkSelect: document.getElementById("frameworkSelect"),
   librariesInput: document.getElementById("librariesInput"),
+  deploySlugInput: document.getElementById("deploySlugInput"),
+  deployAliasesInput: document.getElementById("deployAliasesInput"),
+  deploySlugHint: document.getElementById("deploySlugHint"),
   applySettingsBtn: document.getElementById("applySettingsBtn"),
   saveVersionBtn: document.getElementById("saveVersionBtn"),
   deleteProjectBtn: document.getElementById("deleteProjectBtn"),
@@ -119,7 +122,7 @@ async function bootstrap() {
 function reflectAddresses() {
   const origin = getBaseOrigin();
   els.serverAddress.textContent = origin;
-  els.deployPattern.textContent = `${origin}/000`;
+  els.deployPattern.textContent = `${origin}/my-site`;
 }
 
 function wireEvents() {
@@ -162,6 +165,8 @@ function wireEvents() {
   els.modelInput.addEventListener("input", updateAiSetupHint);
   els.baseUrlInput.addEventListener("input", updateAiSetupHint);
   els.headersInput.addEventListener("input", updateAiSetupHint);
+  els.deploySlugInput.addEventListener("input", handleDeploySlugInput);
+  els.deployAliasesInput.addEventListener("input", handleDeployAliasesInput);
   els.chatToggleBtn.onclick = toggleChatDock;
   els.chatCloseBtn.onclick = () => setChatOpen(false);
   els.editorArea.addEventListener("input", syncEditorToProject);
@@ -195,13 +200,20 @@ async function persistState() {
 
   if (state.storageMode === "server") {
     try {
-      await fetch("api/state", {
+      const response = await fetch("api/state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(state.data)
       });
+      if (!response.ok) {
+        const data = await readJsonResponse(response);
+        throw new Error(data.error || "상태 저장에 실패했습니다.");
+      }
       return;
     } catch (error) {
+      if (!(error instanceof TypeError)) {
+        throw error;
+      }
       state.storageMode = "browser";
       updateStoragePill();
     }
@@ -227,12 +239,17 @@ function render() {
 }
 
 function renderProjectSummary(project) {
+  const aliases = project.deployAliases || [];
+  const redirects = project.redirectSlugs || [];
   els.projectSummary.innerHTML = `
     <div class="row">
       <strong>${escapeHtml(project.name)}</strong>
       <span class="tiny">${project.framework.toUpperCase()}</span>
     </div>
     <div class="tiny">최근 수정: ${escapeHtml(project.updatedAt)}</div>
+    <div class="tiny">배포 주소: /${escapeHtml(project.deploySlug)}</div>
+    ${aliases.length ? `<div class="tiny">추가 주소: ${aliases.map((slug) => `/${escapeHtml(slug)}`).join(", ")}</div>` : ""}
+    ${redirects.length ? `<div class="tiny">이전 주소 리디렉트: ${redirects.slice(0, 3).map((slug) => `/${escapeHtml(slug)}`).join(", ")}${redirects.length > 3 ? "..." : ""}</div>` : ""}
     <div class="tiny mono">${getLiveUrl(project)}</div>
   `;
 }
@@ -241,7 +258,7 @@ function renderProjectList(activeProject) {
   els.projectList.innerHTML = state.data.projects.map((project) => `
     <div class="list-item ${project.id === activeProject.id ? "active" : ""}" data-project-id="${project.id}">
       <strong>${escapeHtml(project.name)}</strong>
-      <div class="tiny">${project.framework.toUpperCase()} · 배포 ${project.deployments.length}개</div>
+      <div class="tiny">${project.framework.toUpperCase()} · 배포 ${project.deployments.length}개 · 추가 주소 ${(project.deployAliases || []).length}개</div>
       <div class="tiny mono">${getLiveUrl(project)}</div>
     </div>
   `).join("");
@@ -251,12 +268,15 @@ function renderSettings(project) {
   els.projectNameInput.value = project.name;
   els.frameworkSelect.value = project.framework;
   els.librariesInput.value = (project.libraries || []).join("\n");
+  els.deploySlugInput.value = project.deploySlug;
+  els.deployAliasesInput.value = (project.deployAliases || []).join("\n");
   els.providerSelect.value = project.ai.provider;
   els.modelInput.value = project.ai.model;
   els.baseUrlInput.value = project.ai.baseUrl;
   els.headersInput.value = project.ai.headersJson;
   els.apiKeyInput.value = project.ai.apiKey || "";
   renderModelOptions(project.ai.detectedModels || [], project.ai.model);
+  renderDeploySlugHint(project.deploySlug, project.id, project.deployAliases || []);
   updateAiSetupHint();
 }
 
@@ -460,7 +480,9 @@ async function cloneProject() {
   const clone = deepClone(project);
   clone.id = makeId();
   clone.name = `${project.name} Copy`;
-  clone.deployNumber = String(state.data.projects.length).padStart(3, "0");
+  clone.deploySlug = makeUniqueDeploySlug(`${project.deploySlug}-copy`, clone.id);
+  clone.deployAliases = [];
+  clone.redirectSlugs = [];
   clone.liveDeploymentId = null;
   clone.deployments = [];
   clone.versions = [];
@@ -478,10 +500,34 @@ async function applyProjectSettings() {
   const nextName = els.projectNameInput.value.trim() || project.name;
   const nextFramework = els.frameworkSelect.value;
   const nextLibraries = els.librariesInput.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  const nextSlug = sanitizeDeploySlug(els.deploySlugInput.value.trim() || project.deploySlug || nextName);
+  const nextAliases = parseDeployAliases(els.deployAliasesInput.value);
+  const nextRedirects = (project.redirectSlugs || []).filter((slug) => slug !== nextSlug && !nextAliases.includes(slug));
   const frameworkChanged = nextFramework !== project.framework;
+  const slugError = getRouteSlugError({
+    projectId: project.id,
+    primarySlug: nextSlug,
+    aliases: nextAliases,
+    redirects: nextRedirects
+  });
 
+  if (slugError) {
+    renderDeploySlugHint(nextSlug, project.id, nextAliases);
+    alert(slugError);
+    return;
+  }
+
+  const previousSlug = project.deploySlug;
   project.name = nextName;
   project.libraries = nextLibraries;
+  project.deploySlug = nextSlug;
+  project.deployAliases = nextAliases;
+  if (previousSlug && previousSlug !== nextSlug && !nextAliases.includes(previousSlug)) {
+    project.redirectSlugs = uniqueSlugs([...nextRedirects, previousSlug])
+      .filter((slug) => slug !== nextSlug && !nextAliases.includes(slug));
+  } else {
+    project.redirectSlugs = nextRedirects;
+  }
 
   if (frameworkChanged) {
     project.framework = nextFramework;
@@ -569,6 +615,17 @@ function formatActiveFile() {
 async function deployProject() {
   syncEditorToProject();
   const project = getActiveProject();
+  const slugError = getRouteSlugError({
+    projectId: project.id,
+    primarySlug: project.deploySlug,
+    aliases: project.deployAliases || [],
+    redirects: project.redirectSlugs || []
+  });
+  if (slugError) {
+    renderDeploySlugHint(project.deploySlug, project.id, project.deployAliases || []);
+    alert(slugError);
+    return;
+  }
   const deployment = {
     id: makeId(),
     label: `deploy v${project.deployments.length + 1}`,
@@ -994,6 +1051,25 @@ function handleApiKeyInput() {
   }
 }
 
+function handleDeploySlugInput() {
+  const sanitized = sanitizeDeploySlug(els.deploySlugInput.value);
+  if (els.deploySlugInput.value !== sanitized) {
+    els.deploySlugInput.value = sanitized;
+  }
+  const project = getActiveProject();
+  renderDeploySlugHint(sanitized, project?.id, parseDeployAliases(els.deployAliasesInput.value));
+}
+
+function handleDeployAliasesInput() {
+  const aliases = parseDeployAliases(els.deployAliasesInput.value);
+  const normalized = aliases.join("\n");
+  if (els.deployAliasesInput.value.trim() !== normalized) {
+    els.deployAliasesInput.value = normalized;
+  }
+  const project = getActiveProject();
+  renderDeploySlugHint(els.deploySlugInput.value, project?.id, aliases);
+}
+
 function inferPresetFromApiKey(apiKey) {
   if (!apiKey) return "";
   if (apiKey.startsWith("sk-ant-")) return "anthropic";
@@ -1072,6 +1148,30 @@ function setAiBusy(isBusy, message) {
   if (message) {
     setAiStatus(message, "");
   }
+}
+
+function renderDeploySlugHint(slug, projectId, aliases = []) {
+  const safeSlug = sanitizeDeploySlug(slug || "");
+  const project = getActiveProject();
+  const error = getRouteSlugError({
+    projectId,
+    primarySlug: safeSlug,
+    aliases,
+    redirects: project?.id === projectId ? project.redirectSlugs || [] : []
+  });
+  if (!safeSlug) {
+    els.deploySlugHint.textContent = "배포 주소는 영어 소문자, 숫자, 하이픈만 사용할 수 있습니다.";
+    els.deploySlugHint.className = "status subtle-status";
+    return;
+  }
+  if (error) {
+    els.deploySlugHint.textContent = error;
+    els.deploySlugHint.className = "status error subtle-status";
+    return;
+  }
+  const aliasText = aliases.length ? ` · 추가 주소 ${aliases.length}개` : "";
+  els.deploySlugHint.textContent = `사용 가능: /${safeSlug}${aliasText}`;
+  els.deploySlugHint.className = "status ok subtle-status";
 }
 
 function friendlyAiError(error) {
@@ -1557,6 +1657,7 @@ function createInitialState() {
 
 function makeProject(name, framework, orderNumber) {
   const files = getTemplate(framework);
+  const slugBase = sanitizeDeploySlug(name) || `site-${orderNumber}`;
   return {
     id: makeId(),
     name,
@@ -1567,7 +1668,9 @@ function makeProject(name, framework, orderNumber) {
     versions: [],
     deployments: [],
     liveDeploymentId: null,
-    deployNumber: String(orderNumber).padStart(3, "0"),
+    deploySlug: makeUniqueDeploySlug(slugBase),
+    deployAliases: [],
+    redirectSlugs: [],
     ai: {
       provider: "auto",
       model: "",
@@ -1709,6 +1812,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);`
 function migrateState(raw) {
   const source = raw && Array.isArray(raw.projects) ? raw : createInitialState();
   source.projects = source.projects.map((project, index) => migrateProject(project, index));
+  source.projects = reserveRouteSlugs(source.projects);
   if (!source.activeProjectId && source.projects[0]) {
     source.activeProjectId = source.projects[0].id;
   }
@@ -1719,6 +1823,7 @@ function migrateState(raw) {
 function migrateProject(project, index) {
   const framework = ["html", "react", "vue"].includes(project.framework) ? project.framework : "html";
   const files = project.files && typeof project.files === "object" ? project.files : getTemplate(framework);
+  const fallbackSlug = sanitizeDeploySlug(project.name || `project-${index + 1}`) || `site-${index}`;
   return {
     id: project.id || makeId(),
     name: project.name || `Project ${index + 1}`,
@@ -1729,7 +1834,9 @@ function migrateProject(project, index) {
     versions: Array.isArray(project.versions) ? project.versions : [],
     deployments: Array.isArray(project.deployments) ? project.deployments : [],
     liveDeploymentId: project.liveDeploymentId || null,
-    deployNumber: String(project.deployNumber || index).padStart(3, "0"),
+    deploySlug: sanitizeDeploySlug(project.deploySlug || project.deployNumber || fallbackSlug) || `site-${index}`,
+    deployAliases: uniqueSlugs(project.deployAliases || []),
+    redirectSlugs: uniqueSlugs(project.redirectSlugs || []),
     ai: {
       provider: project.ai?.provider || "auto",
       model: project.ai?.model || "",
@@ -1756,7 +1863,155 @@ function getBaseOrigin() {
 }
 
 function getLiveUrl(project) {
-  return state.storageMode === "server" ? `${window.location.origin}/${project.deployNumber}` : `local://${project.deployNumber}`;
+  return state.storageMode === "server" ? `${window.location.origin}/${project.deploySlug}` : `local://${project.deploySlug}`;
+}
+
+function sanitizeDeploySlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function parseDeployAliases(value) {
+  return uniqueSlugs(
+    String(value || "")
+      .split(/\r?\n|,/)
+      .map((line) => sanitizeDeploySlug(line))
+      .filter(Boolean)
+  );
+}
+
+function uniqueSlugs(slugs) {
+  return [...new Set((slugs || []).map((slug) => sanitizeDeploySlug(slug)).filter(Boolean))];
+}
+
+function getRouteSlugError({ projectId, primarySlug, aliases = [], redirects = [] }) {
+  const primaryError = getSingleRouteSlugError(primarySlug, "배포 주소");
+  if (primaryError) return primaryError;
+
+  const localSeen = new Map();
+  const addLocalSlug = (slug, label) => {
+    const singleError = getSingleRouteSlugError(slug, label);
+    if (singleError) return singleError;
+    if (localSeen.has(slug)) {
+      return `${label}가 다른 주소와 중복됩니다: /${slug}`;
+    }
+    localSeen.set(slug, label);
+    return "";
+  };
+
+  let error = addLocalSlug(primarySlug, "배포 주소");
+  if (error) return error;
+
+  for (const alias of aliases) {
+    error = addLocalSlug(alias, "추가 배포 주소");
+    if (error) return error;
+  }
+
+  for (const redirect of redirects) {
+    error = addLocalSlug(redirect, "이전 주소 리디렉트");
+    if (error) return error;
+  }
+
+  for (const slug of localSeen.keys()) {
+    if (routeSlugExists(slug, projectId)) {
+      return "이미 사용 중인 배포 주소입니다. 다른 주소를 입력해 주세요.";
+    }
+  }
+
+  return "";
+}
+
+function getSingleRouteSlugError(slug, label) {
+  if (!slug) return `${label}를 입력해 주세요.`;
+  if (slug.length < 2) return `${label}는 2자 이상이어야 합니다.`;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    return `${label}는 영어 소문자, 숫자, 하이픈만 사용할 수 있습니다.`;
+  }
+  if (isReservedDeploySlug(slug)) {
+    return "이 주소는 시스템에서 사용 중이라 배포 주소로 쓸 수 없습니다.";
+  }
+  return "";
+}
+
+function getDeploySlugError(slug, projectId) {
+  return getRouteSlugError({ projectId, primarySlug: slug });
+}
+
+function isReservedDeploySlug(slug) {
+  return ["api", "app", "index", "styles", "assets", "favicon"].includes(slug);
+}
+
+function routeSlugExists(slug, excludeProjectId) {
+  if (!state.data?.projects) return false;
+  return state.data.projects.some((project) => (
+    project.id !== excludeProjectId && getProjectRouteSlugs(project).includes(slug)
+  ));
+}
+
+function getProjectRouteSlugs(project) {
+  return uniqueSlugs([
+    project.deploySlug,
+    ...(project.deployAliases || []),
+    ...(project.redirectSlugs || [])
+  ]);
+}
+
+function reserveRouteSlugs(projects) {
+  const seen = new Set();
+  return projects.map((project) => {
+    const deploySlug = makeUniqueDeploySlugFromSet(project.deploySlug, seen);
+    const deployAliases = [];
+    for (const alias of uniqueSlugs(project.deployAliases || [])) {
+      if (!getSingleRouteSlugError(alias, "추가 배포 주소") && !seen.has(alias)) {
+        seen.add(alias);
+        deployAliases.push(alias);
+      }
+    }
+    const redirectSlugs = [];
+    for (const redirect of uniqueSlugs(project.redirectSlugs || [])) {
+      if (!getSingleRouteSlugError(redirect, "이전 주소 리디렉트") && !seen.has(redirect)) {
+        seen.add(redirect);
+        redirectSlugs.push(redirect);
+      }
+    }
+    return {
+      ...project,
+      deploySlug,
+      deployAliases,
+      redirectSlugs
+    };
+  });
+}
+
+function makeUniqueDeploySlug(base, excludeProjectId) {
+  const safeBase = sanitizeDeploySlug(base) || "site";
+  let candidate = safeBase;
+  let suffix = 2;
+  while (getDeploySlugError(candidate, excludeProjectId)) {
+    candidate = `${safeBase}-${suffix}`.slice(0, 40).replace(/-+$/g, "");
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function makeUniqueDeploySlugFromSet(base, seen) {
+  const safeBase = sanitizeDeploySlug(base) || "site";
+  let candidate = safeBase;
+  let suffix = 2;
+  while (
+    getSingleRouteSlugError(candidate, "배포 주소") ||
+    seen.has(candidate)
+  ) {
+    candidate = `${safeBase}-${suffix}`.slice(0, 40).replace(/-+$/g, "");
+    suffix += 1;
+  }
+  seen.add(candidate);
+  return candidate;
 }
 
 function truncate(text, maxLength) {
