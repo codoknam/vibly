@@ -1,0 +1,32 @@
+{
+  "projects": [
+    {
+      "id": "welcome001",
+      "name": "Welcome Project",
+      "framework": "html",
+      "libraries": [],
+      "files": {
+        "index.html": "<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>New Vibly Site</title>\n</head>\n<body>\n  <main class=\"hero\">\n    <h1>Welcome to Vibly</h1>\n    <p>AI로 사이트를 만들고 여기서 바로 수정해보세요.</p>\n    <button id=\"ctaBtn\">Get Started</button>\n  </main>\n</body>\n</html>",
+        "style.css": "body {\n  margin: 0;\n  font-family: \"Segoe UI\", sans-serif;\n  background: linear-gradient(180deg, #fff8ef, #f3e6d6);\n  color: #1f160f;\n}\n\n.hero {\n  min-height: 100vh;\n  display: grid;\n  place-content: center;\n  gap: 16px;\n  text-align: center;\n  padding: 24px;\n}",
+        "script.js": "document.getElementById(\"ctaBtn\")?.addEventListener(\"click\", () => {\n  alert(\"Vibly says hi.\");\n});"
+      },
+      "activeFile": "index.html",
+      "versions": [],
+      "deployments": [],
+      "liveDeploymentId": null,
+      "deployNumber": "000",
+      "ai": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "baseUrl": "https://api.openai.com/v1/chat/completions",
+        "headersJson": "",
+        "apiKey": "",
+        "messages": []
+      },
+      "createdAt": "2026. 7. 4. 오전 12:00:00",
+      "updatedAt": "2026. 7. 4. 오전 12:00:00"
+    }
+  ],
+  "activeProjectId": "welcome001",
+  "updatedAt": "2026. 7. 4. 오전 12:00:00"
+}
