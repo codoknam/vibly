@@ -39,9 +39,9 @@ const AI_PRESETS = {
   gemini: {
     label: "Google Gemini",
     provider: "gemini",
-    model: "gemini-1.5-flash",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-    hint: "Gemini 키는 AIza로 시작하는 경우가 많습니다."
+    model: "gemini-2.5-flash",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    hint: "Gemini 키는 AIza 또는 AQ. 로 시작하는 경우가 많습니다."
   },
   custom: {
     label: "직접 입력",
@@ -51,6 +51,8 @@ const AI_PRESETS = {
     hint: "임의 API는 제공사 문서의 chat/completions 주소와 모델명을 직접 넣으면 됩니다."
   }
 };
+
+const LEGACY_GEMINI_MODELS = new Set(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]);
 
 const els = {
   serverAddress: document.getElementById("serverAddress"),
@@ -904,7 +906,7 @@ function getDetectionCandidates(provider, apiKey, baseUrl) {
   if (apiKey.startsWith("gsk_")) {
     return [{ provider: "openai", baseUrl: "https://api.groq.com/openai/v1/chat/completions" }];
   }
-  if (apiKey.startsWith("AIza")) {
+  if (looksLikeGeminiApiKey(apiKey)) {
     return [{ provider: "gemini", baseUrl: "" }];
   }
 
@@ -913,6 +915,39 @@ function getDetectionCandidates(provider, apiKey, baseUrl) {
     { provider: "anthropic", baseUrl: "https://api.anthropic.com/v1/messages" },
     { provider: "gemini", baseUrl: "" }
   ];
+}
+
+function shouldUseDirectAiFallback(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("fetch failed")
+    || message.includes("failed to fetch")
+    || message.includes("network")
+    || Number(error?.responseStatus) >= 500;
+}
+
+async function detectApi(config) {
+  if (state.storageMode === "server" && window.location.protocol !== "file:") {
+    try {
+      const response = await fetch("api/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config)
+      });
+      const data = await readJsonResponse(response);
+      if (!response.ok) {
+        const error = new Error(data.error || "API auto-detect failed");
+        error.responseStatus = response.status;
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      if (!shouldUseDirectAiFallback(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return detectApiDirect(config);
 }
 
 async function detectOpenAiCompatible(apiKey, baseUrl, headers = {}) {
@@ -990,7 +1025,7 @@ async function detectGemini(apiKey, baseUrl, headers = {}) {
   if (!models.length) {
     throw new Error("Gemini 모델을 찾지 못했습니다.");
   }
-  const model = choosePreferredModel(models, ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]);
+  const model = choosePreferredModel(models, ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]);
   return {
     provider: "gemini",
     label: "Google Gemini",
@@ -1044,8 +1079,12 @@ function applyAiPreset(presetName, options = {}) {
 
 function handleApiKeyInput() {
   const presetName = inferPresetFromApiKey(els.apiKeyInput.value.trim());
-  if (presetName && (els.providerSelect.value === "auto" || !els.baseUrlInput.value.trim())) {
-    applyAiPreset(presetName, { keepExisting: true, silent: true });
+  const isDefaultOpenAiState = els.providerSelect.value === "openai"
+    && els.modelInput.value.trim() === AI_PRESETS.openai.model
+    && els.baseUrlInput.value.trim() === AI_PRESETS.openai.baseUrl;
+
+  if (presetName && (els.providerSelect.value === "auto" || !els.baseUrlInput.value.trim() || isDefaultOpenAiState)) {
+    applyAiPreset(presetName, { keepExisting: !isDefaultOpenAiState, silent: true });
   } else {
     updateAiSetupHint();
   }
@@ -1075,9 +1114,13 @@ function inferPresetFromApiKey(apiKey) {
   if (apiKey.startsWith("sk-ant-")) return "anthropic";
   if (apiKey.startsWith("sk-or-v1-")) return "openrouter";
   if (apiKey.startsWith("gsk_")) return "groq";
-  if (apiKey.startsWith("AIza")) return "gemini";
+  if (looksLikeGeminiApiKey(apiKey)) return "gemini";
   if (apiKey.startsWith("sk-")) return "openai";
   return "";
+}
+
+function looksLikeGeminiApiKey(apiKey) {
+  return apiKey.startsWith("AIza") || apiKey.startsWith("AQ.");
 }
 
 function updateAiSetupHint(detected, overrideText) {
@@ -1465,6 +1508,31 @@ async function requestAiDirect(payload) {
   return extractJsonFromText(payloadJson.choices?.[0]?.message?.content || "", mode);
 }
 
+async function requestAi(payload) {
+  if (state.storageMode === "server" && window.location.protocol !== "file:") {
+    try {
+      const response = await fetch("api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await readJsonResponse(response);
+      if (!response.ok) {
+        const error = new Error(data.error || "AI request failed");
+        error.responseStatus = response.status;
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      if (!shouldUseDirectAiFallback(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return requestAiDirect(payload);
+}
+
 function extractJsonFromText(text, mode = "build") {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenced ? fenced[1] : text;
@@ -1508,9 +1576,9 @@ function applyProviderDefaults() {
   }
 
   if (provider === "gemini") {
-    els.baseUrlInput.value = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent";
+    els.baseUrlInput.value = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
     if (!els.modelInput.value || els.modelInput.value === "gpt-4o-mini" || els.modelInput.value.includes("claude")) {
-      els.modelInput.value = "gemini-1.5-pro";
+      els.modelInput.value = "gemini-2.5-flash";
     }
   }
 }
@@ -1671,15 +1739,15 @@ function makeProject(name, framework, orderNumber) {
     deploySlug: makeUniqueDeploySlug(slugBase),
     deployAliases: [],
     redirectSlugs: [],
-    ai: {
-      provider: "auto",
-      model: "",
-      baseUrl: "",
+    ai: normalizeAiSettings({
+      provider: "gemini",
+      model: AI_PRESETS.gemini.model,
+      baseUrl: AI_PRESETS.gemini.baseUrl,
       headersJson: "",
       apiKey: "",
       messages: [],
       detectedModels: []
-    },
+    }),
     createdAt: formatNow(),
     updatedAt: formatNow()
   };
@@ -1824,6 +1892,7 @@ function migrateProject(project, index) {
   const framework = ["html", "react", "vue"].includes(project.framework) ? project.framework : "html";
   const files = project.files && typeof project.files === "object" ? project.files : getTemplate(framework);
   const fallbackSlug = sanitizeDeploySlug(project.name || `project-${index + 1}`) || `site-${index}`;
+  const ai = normalizeAiSettings(project.ai);
   return {
     id: project.id || makeId(),
     name: project.name || `Project ${index + 1}`,
@@ -1837,18 +1906,80 @@ function migrateProject(project, index) {
     deploySlug: sanitizeDeploySlug(project.deploySlug || project.deployNumber || fallbackSlug) || `site-${index}`,
     deployAliases: uniqueSlugs(project.deployAliases || []),
     redirectSlugs: uniqueSlugs(project.redirectSlugs || []),
-    ai: {
-      provider: project.ai?.provider || "auto",
-      model: project.ai?.model || "",
-      baseUrl: project.ai?.baseUrl || "",
-      headersJson: project.ai?.headersJson || "",
-      apiKey: project.ai?.apiKey || "",
-      messages: Array.isArray(project.ai?.messages) ? project.ai.messages : [],
-      detectedModels: Array.isArray(project.ai?.detectedModels) ? project.ai.detectedModels : []
-    },
+    ai,
     createdAt: project.createdAt || formatNow(),
     updatedAt: project.updatedAt || formatNow()
   };
+}
+
+function normalizeAiSettings(ai) {
+  const raw = ai && typeof ai === "object" ? ai : {};
+  const apiKey = String(raw.apiKey || "").trim();
+  const headersJson = String(raw.headersJson || "");
+  const messages = Array.isArray(raw.messages) ? raw.messages : [];
+  const detectedModels = Array.isArray(raw.detectedModels) ? raw.detectedModels : [];
+  const provider = String(raw.provider || "").trim().toLowerCase();
+  const model = String(raw.model || "").trim();
+  const baseUrl = String(raw.baseUrl || "").trim();
+  const geminiContext = provider === "gemini"
+    || isGeminiApiKey(apiKey)
+    || baseUrl.includes("generativelanguage.googleapis.com")
+    || model.startsWith("gemini");
+  const anthropicContext = !geminiContext && (
+    provider === "anthropic"
+    || baseUrl.includes("anthropic.com")
+    || model.includes("claude")
+  );
+
+  if (geminiContext) {
+    return {
+      provider: "gemini",
+      model: normalizeGeminiModel(model),
+      baseUrl: normalizeGeminiBaseUrl(baseUrl),
+      headersJson,
+      apiKey,
+      messages,
+      detectedModels
+    };
+  }
+
+  if (anthropicContext) {
+    return {
+      provider: "anthropic",
+      model: model || AI_PRESETS.anthropic.model,
+      baseUrl: baseUrl || AI_PRESETS.anthropic.baseUrl,
+      headersJson,
+      apiKey,
+      messages,
+      detectedModels
+    };
+  }
+
+  return {
+    provider: provider || "openai",
+    model: model || AI_PRESETS.openai.model,
+    baseUrl: baseUrl || AI_PRESETS.openai.baseUrl,
+    headersJson,
+    apiKey,
+    messages,
+    detectedModels
+  };
+}
+
+function normalizeGeminiModel(model) {
+  const normalized = String(model || "").trim().toLowerCase();
+  if (!normalized || normalized === AI_PRESETS.openai.model || normalized.includes("claude") || LEGACY_GEMINI_MODELS.has(normalized)) {
+    return AI_PRESETS.gemini.model;
+  }
+  return model;
+}
+
+function normalizeGeminiBaseUrl(baseUrl) {
+  const normalized = String(baseUrl || "").trim();
+  if (!normalized || normalized === AI_PRESETS.openai.baseUrl || normalized.includes("generativelanguage.googleapis.com")) {
+    return AI_PRESETS.gemini.baseUrl;
+  }
+  return normalized;
 }
 
 function pickDefaultFile(framework, files) {
